@@ -5,65 +5,83 @@ import bitcoin
 
 class BIP32:
 
-    def __init__(self, data = None):
-        if data == None: return
-        if 16 > len(data) or len(data) > 64: raise Exception('BIP32 init: invalid seed')
-        I = hmac.new('Bitcoin seed', data, hashlib.sha512).digest()
+    def __init__(self, privkey, pubkey, chaincode, depth, fingerprint, child_num, is_private, is_hard):
+        self.chaincode = chaincode
+        self.privkey = privkey
+        self.pubkey = pubkey
+        self.is_private = is_private
+        self.depth = depth
+        self.fingerprint = fingerprint
+        self.child_num = child_num
+        self.hard = is_hard
+
+    @classmethod
+    def from_seed(cls, seed):
+        if 16 > len(seed) or len(seed) > 64: raise Exception('BIP32 init: invalid seed')
+        I = hmac.new('Bitcoin seed', seed, hashlib.sha512).digest()
         Il = I[:32]
         Ir = I[32:]
-        self.chaincode = Ir
-        self.privkey = Il
-        self.pubkey = bitcoin.privkeyToPubkey(Il)
-        self.is_private = True
-        self.depth = 0
-        self.fingerprint = chr(0)*4
-        self.child_num = 0
-        self.hard = False
+        chaincode = Ir
+        privkey = Il
+        pubkey = bitcoin.privkeyToPubkey(Il)
+        is_private = True
+        depth = 0
+        fingerprint = chr(0)*4
+        child_num = 0
+        is_hard = False
+        return cls(privkey, pubkey, chaincode, depth, fingerprint, child_num, is_private, is_hard)
 
-    def from_xprv(self, xprv):
+    @classmethod
+    def from_xprv(cls, xprv):
         decoded = bitcoin.DecodeBase58Check(xprv)
         if decoded == None: raise Exception('BIP32.from_xprv: invalid xprv')
         if decoded[:4] != '0488ade4'.decode('hex'): raise Exception('BIP32.from_xprv: not proper xprv')
-        self.depth = int(decoded[4:5].encode('hex'),16)
-        self.fingerprint = decoded[5:9]
-        self.child_num = int(decoded[9:13].encode('hex'),16)
-        if self.child_num & 2**31:
-            self.hard = True
-            self.child_num = self.child_num & ((2**31) - 1)
+        depth = int(decoded[4:5].encode('hex'),16)
+        fingerprint = decoded[5:9]
+        child_num = int(decoded[9:13].encode('hex'),16)
+        if child_num & 2**31:
+            is_hard = True
+            child_num = child_num & ((2**31) - 1)
         else:
-            self.hard = False
-        self.chaincode = decoded[13:45]
-        self.privkey = decoded[46:]
-        self.pubkey = bitcoin.privkeyToPubkey(decoded[46:])
-        self.is_private = True
-        return self
+            is_hard = False
+        chaincode = decoded[13:45]
+        privkey = decoded[46:]
+        pubkey = bitcoin.privkeyToPubkey(decoded[46:])
+        is_private = True
+        return cls(privkey, pubkey, chaincode, depth, fingerprint, child_num, is_private, is_hard)
 
-    def from_xpub(self, xpub):
+    @classmethod
+    def from_xpub(cls, xpub):
         decoded = bitcoin.DecodeBase58Check(xpub)
         if decoded == None: raise Exception('BIP32.from_xpub: invalid xpub')
         if decoded[:4] != '0488b21e'.decode('hex'): raise Exception('BIP32.from_xpub: not proper xpub')
-        self.depth = int(decoded[4:5].encode('hex'),16)
-        self.fingerprint = decoded[5:9]
-        self.child_num = int(decoded[9:13].encode('hex'),16)
-        if self.child_num & 2**31:
-            self.hard = True
-            self.child_num = self.child_num & ((2**31) - 1)
+        depth = int(decoded[4:5].encode('hex'),16)
+        fingerprint = decoded[5:9]
+        child_num = int(decoded[9:13].encode('hex'),16)
+        if child_num & 2**31:
+            is_hard = True
+            child_num = child_num & ((2**31) - 1)
         else:
-            self.hard = False
-        self.chaincode = decoded[13:45]
-        self.privkey = None
-        self.pubkey = decoded[45:]
-        self.is_private = False
-        return self
+            is_hard = False
+        chaincode = decoded[13:45]
+        privkey = None
+        pubkey = decoded[45:]
+        is_private = False
+        return cls(privkey, pubkey, chaincode, depth, fingerprint, child_num, is_private, is_hard)
+
+    def neuter(self):
+        if self.privkey == None: raise Exception('BIP32.neuter: no private key to neuter')
+        return BIP32(None, self.pubkey, self.chaincode, self.depth, self.fingerprint, self.child_num, False, self.hard)
 
     def derive(self, path):
         if path[0].lower() != 'm': raise Exception('BIP32.derive: not proper path')
+        newHD = BIP32(self.privkey, self.pubkey, self.chaincode, self.depth, self.fingerprint, self.child_num, self.is_private, self.hard)
         paths = path.split('/')
-        if self.is_private:
-            ckd = self.privCKD
+        if newHD.is_private:
+            ckd = newHD.privCKD
             nohard = False
         else:
-            ckd = self.pubCKD
+            ckd = newHD.pubCKD
             nohard = True
         for x in paths:
             hardened = False
@@ -73,7 +91,7 @@ class BIP32:
                 hardened = True
                 x = x[:-1]
             ckd(int(x), hardened)
-        return self
+        return newHD
 
     def privCKD(self, child_num, hardened = False):
         if child_num >= 2**31:
